@@ -1,0 +1,93 @@
+import os
+import yt_dlp
+import asyncio
+import uuid
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+
+# আপনার ক্রেডেনশিয়াল
+API_ID = 35039711
+API_HASH = "858eb250cb39465b6342fa32b689eb36"
+BOT_TOKEN = "7465635278:AAEyf4y6cyfUNrxfAs5BxSNYq9BgG7zMy4Y"
+
+app = Client("InstaDownloaderBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+link_storage = {}
+
+def download_content(url, mode, user_id):
+    unique_id = uuid.uuid4().hex[:5]
+    file_name = f"{mode}_{user_id}_{unique_id}"
+    
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+    }
+    
+    if mode == "video":
+        ydl_opts['format'] = 'best'
+        ydl_opts['outtmpl'] = f"{file_name}.mp4"
+        final_file = f"{file_name}.mp4"
+    else: # audio mode
+        ydl_opts['format'] = 'bestaudio/best'
+        ydl_opts['outtmpl'] = f"{file_name}.%(ext)s"
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+        final_file = f"{file_name}.mp3"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    return final_file
+
+@app.on_message(filters.text & (filters.private | filters.group))
+async def handle_link(client, message: Message):
+    if "instagram.com" in message.text:
+        url = message.text
+        link_id = uuid.uuid4().hex[:8]
+        link_storage[link_id] = url
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🎬 Video", callback_data=f"vid|{link_id}"),
+                InlineKeyboardButton("🎵 Audio", callback_data=f"aud|{link_id}")
+            ]
+        ])
+        await message.reply("আপনি কি ডাউনলোড করতে চান?", reply_markup=keyboard, quote=True)
+
+@app.on_callback_query()
+async def callback_handler(client, query: CallbackQuery):
+    data = query.data.split("|")
+    mode_type = "video" if data[0] == "vid" else "audio"
+    link_id = data[1]
+    
+    url = link_storage.get(link_id)
+    if not url:
+        await query.answer("লিঙ্কটি পাওয়া যায়নি!", show_alert=True)
+        return
+
+    await query.message.edit(f"⏳ {mode_type.capitalize()} প্রসেস করা হচ্ছে...")
+
+    try:
+        loop = asyncio.get_event_loop()
+        file_path = await loop.run_in_executor(None, download_content, url, mode_type, query.from_user.id)
+
+        if mode_type == "video":
+            await query.message.reply_video(video=file_path, caption="✅ ভিডিও ডাউনলোড সম্পন্ন!", quote=True)
+        else:
+            await query.message.reply_audio(audio=file_path, caption="✅ অডিও ডাউনলোড সম্পন্ন!", quote=True)
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await query.message.delete()
+
+    except Exception as e:
+        await query.message.edit(f"❌ এরর: FFmpeg ইনস্টল করা আছে কি? পুনরায় চেক করুন।")
+        print(f"Error: {e}")
+    finally:
+        link_storage.pop(link_id, None)
+
+print("বটটি এখন FFmpeg এর সাথে কাজ করার জন্য তৈরি!")
+app.run()
